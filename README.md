@@ -88,11 +88,11 @@ python evaluate.py training.checkpoint_path=/path/to/ckpt.pt dataset.val_dir=/pa
 ## Creating a submission file
 
 Reads test frames from **`dataset.test_dir`**, clip order from **`dataset.test_manifest`**, writes **`dataset.submission_output`**.
-
+ 
 ```bash
 python create_submission.py training.checkpoint_path=best_model.pt
 ```
-
+ 
 ```bash
 python create_submission.py \
   training.checkpoint_path=best_model.pt \

@@ -1,0 +1,15 @@
+
+   # @package _global_
+   model:
+     name: mvit_test_1
+     pretrained: true
+     num_classes: ${num_classes}
+     # your hyperparameters
+     dropout_rate: 0.1
+     attention_heads: 8
+     mlp_ratio: 4
+     qkv_bias: true
+     norm_layer: "layernorm"
+     init_values: 1e-6
+     use_checkpoint: false
+     

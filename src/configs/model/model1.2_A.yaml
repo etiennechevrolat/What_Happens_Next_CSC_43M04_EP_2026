@@ -1,0 +1,8 @@
+# @package _global_
+model:
+  name: model1.2_A
+  pretrained: false
+  num_classes: ${num_classes}
+  hidden_dim: 256
+  dropout_rate: 0.3
+  attention_heads: 8

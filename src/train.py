@@ -2,7 +2,6 @@
 Train a video classifier on folders of frames.
 
 Run from the ``src/`` directory (so ``configs/`` resolves)::
-
     python train.py
     python train.py experiment=cnn_lstm
 
@@ -27,6 +26,8 @@ from torch.utils.data import DataLoader
 from dataset.video_dataset import VideoFrameDataset, collect_video_samples
 from models.cnn_baseline import CNNBaseline
 from models.cnn_lstm import CNNLSTM
+from models.model1_A import VideoViT
+from models.model12_A import VideoViT_CNN_2
 from utils import build_transforms, set_seed, split_train_val
 
 
@@ -34,7 +35,7 @@ def build_model(cfg: DictConfig) -> nn.Module:
     """Create the model described by cfg.model.name."""
     name = cfg.model.name
     num_classes = cfg.model.num_classes
-    pretrained = cfg.model.pretrained
+    pretrained = cfg.model.get("pretrained", False)
 
     if name == "cnn_baseline":
         return CNNBaseline(num_classes=num_classes, pretrained=pretrained)
@@ -45,7 +46,20 @@ def build_model(cfg: DictConfig) -> nn.Module:
             pretrained=pretrained,
             lstm_hidden_size=int(hidden),
         )
+    if name == "mvit_test_1":
+        from models.model1 import MViT_test_1
+        freeze_backbone = cfg.model.get("freeze_backbone", False)
+        return MViT_test_1(num_classes=num_classes, pretrained=pretrained, freeze_backbone=freeze_backbone)
 
+    
+    if name == "model1.2_A":
+        hidden_dim = int(cfg.model.get("hidden_dim", 512))
+        n_heads = int(cfg.model.get("attention_heads", 8))
+        dropout_rate = float(cfg.model.get("dropout_rate", 0.1))
+        num_frames = int(cfg.dataset.num_frames)
+        return VideoViT_CNN_2(num_classes=num_classes, hidden_dim=hidden_dim,
+                        n_heads=n_heads, dropout_rate=dropout_rate, num_frames=num_frames, pretrained=pretrained)
+    
     raise ValueError(f"Unknown model.name: {name}")
 
 
@@ -61,7 +75,6 @@ def train_one_epoch(
     running_loss = 0.0
     correct = 0
     total = 0
-
     for video_batch, labels in data_loader:
         # video_batch: (B, T, C, H, W), labels: (B,)
         video_batch = video_batch.to(device)
@@ -139,7 +152,7 @@ def main(cfg: DictConfig) -> None:
     )
 
     # Match normalization to pretrained flag (ImageNet stats when using pretrained weights).
-    use_imagenet_norm = bool(cfg.model.pretrained)
+    use_imagenet_norm = bool(cfg.model.get("pretrained", False))
     train_transform = build_transforms(
         is_training=True, use_imagenet_norm=use_imagenet_norm
     )
@@ -177,7 +190,12 @@ def main(cfg: DictConfig) -> None:
 
     model = build_model(cfg).to(device)
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=float(cfg.training.lr))
+    trainable_params = filter(lambda p: p.requires_grad, model.parameters())
+    optimizer = torch.optim.AdamW(
+        trainable_params,
+        lr=float(cfg.training.lr),
+        weight_decay=1e-4
+    )
 
     best_val_accuracy = 0.0
     checkpoint_path = Path(cfg.training.checkpoint_path).resolve()
@@ -200,7 +218,7 @@ def main(cfg: DictConfig) -> None:
                 "model_state_dict": model.state_dict(),
                 "model_name": cfg.model.name,
                 "num_classes": int(cfg.model.num_classes),
-                "pretrained": bool(cfg.model.pretrained),
+                "pretrained": bool(cfg.model.get("pretrained", False)),
                 "num_frames": int(cfg.dataset.num_frames),
                 "val_accuracy": val_acc,
                 "config": OmegaConf.to_container(cfg, resolve=True),

@@ -1,0 +1,14 @@
+# @package _global_
+  defaults:
+  - override /model: 
+  
+  model : 
+    name : mvit_test_1
+    pretrained: true
+    num_classes: ${num_classes}
+    freeze_backbone: False
+    
+  dataset : 
+    num_frames: 4
+    
+  
