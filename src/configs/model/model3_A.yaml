@@ -1,9 +1,7 @@
 # @package _global_
 model:
-  name: model2_A
+  name: model3_A
   pretrained: false
   num_classes: ${num_classes}
-  hidden_dim: 512
   dropout_rate: 0.5
-  attention_heads: 8
   norm_layer: "layernorm"

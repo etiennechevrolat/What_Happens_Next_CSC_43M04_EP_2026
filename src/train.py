@@ -29,6 +29,7 @@ from models.cnn_lstm import CNNLSTM
 from models.model1_A import VideoViT
 from models.model12_A import VideoViT_CNN_2
 from models.model2_A import VideoViT_CNN_3
+from models.model3_A import R2Plus1D
 from utils import build_transforms, set_seed, split_train_val
 
 
@@ -67,6 +68,10 @@ def build_model(cfg: DictConfig) -> nn.Module:
         num_frames = int(cfg.dataset.num_frames)
         return VideoViT_CNN_3(num_classes=num_classes, hidden_dim=hidden_dim,
                         n_heads=n_heads, dropout_rate=dropout_rate, num_frames=num_frames, pretrained=pretrained)
+    if name == "model3_A":
+        dropout_rate = float(cfg.model.get("dropout_rate", 0.5))
+        num_frames = int(cfg.dataset.num_frames)
+        return R2Plus1D(num_classes=num_classes, dropout=dropout_rate, num_frames=num_frames, pretrained=pretrained)
     raise ValueError(f"Unknown model.name: {name}")
 
 
@@ -211,7 +216,7 @@ def main(cfg: DictConfig) -> None:
     optimizer = torch.optim.AdamW(
         trainable_params,
         lr=float(cfg.training.lr),
-        weight_decay=1e-4
+        weight_decay=0.05
     )
 
     best_val_accuracy = 0.0
