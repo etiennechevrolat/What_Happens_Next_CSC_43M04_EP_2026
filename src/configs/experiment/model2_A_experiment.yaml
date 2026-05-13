@@ -1,0 +1,10 @@
+# @package _global_
+defaults:
+  - override /model: model2_A
+
+model:
+  name: model2_A
+  num_classes: ${num_classes}
+
+dataset:
+  num_frames: 4

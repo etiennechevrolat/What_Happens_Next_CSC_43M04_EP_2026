@@ -28,6 +28,7 @@ from models.cnn_baseline import CNNBaseline
 from models.cnn_lstm import CNNLSTM
 from models.model1_A import VideoViT
 from models.model12_A import VideoViT_CNN_2
+from models.model2_A import VideoViT_CNN_3
 from utils import build_transforms, set_seed, split_train_val
 
 
@@ -59,7 +60,13 @@ def build_model(cfg: DictConfig) -> nn.Module:
         num_frames = int(cfg.dataset.num_frames)
         return VideoViT_CNN_2(num_classes=num_classes, hidden_dim=hidden_dim,
                         n_heads=n_heads, dropout_rate=dropout_rate, num_frames=num_frames, pretrained=pretrained)
-    
+    if name == "model2_A":
+        hidden_dim = int(cfg.model.get("hidden_dim", 512))
+        n_heads = int(cfg.model.get("attention_heads", 8))
+        dropout_rate = float(cfg.model.get("dropout_rate", 0.1))
+        num_frames = int(cfg.dataset.num_frames)
+        return VideoViT_CNN_3(num_classes=num_classes, hidden_dim=hidden_dim,
+                        n_heads=n_heads, dropout_rate=dropout_rate, num_frames=num_frames, pretrained=pretrained)
     raise ValueError(f"Unknown model.name: {name}")
 
 
@@ -189,6 +196,16 @@ def main(cfg: DictConfig) -> None:
     )
 
     model = build_model(cfg).to(device)
+
+    # Resume from checkpoint if specified
+    resume_path = cfg.training.get("resume_from")
+    if resume_path:
+        resume_path = Path(resume_path).resolve()
+        raw = torch.load(resume_path, map_location=device)
+        model.load_state_dict(raw["model_state_dict"])
+        best_val_accuracy = float(raw.get("val_accuracy", 0.0))
+        print(f"Resumed from {resume_path} (val acc={best_val_accuracy:.4f})")
+
     loss_fn = nn.CrossEntropyLoss()
     trainable_params = filter(lambda p: p.requires_grad, model.parameters())
     optimizer = torch.optim.AdamW(
