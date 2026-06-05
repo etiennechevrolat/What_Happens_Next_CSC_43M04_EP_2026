@@ -2,8 +2,12 @@
 training:
   batch_size: 16
   lr: 0.0001
-  epochs: 20
-  num_workers: 2
+  epochs: 100
+  num_workers: 4
   # Where to save the best checkpoint (by validation accuracy)
   checkpoint_path: ${hydra:runtime.cwd}/best_model.pt
   device: cuda
+  # W&B (optionnel) — laisser null pour désactiver
+  wandb_project: null
+  wandb_run_name: null
+  wandb_run_id: null

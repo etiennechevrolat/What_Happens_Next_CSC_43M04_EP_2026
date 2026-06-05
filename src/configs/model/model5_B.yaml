@@ -1,0 +1,16 @@
+# @package _global_
+model:
+  name: model5_B
+  pretrained: false
+  num_classes: ${num_classes}
+  tokens_per_frame: 49        # 7*7 après stage4 pour entrée 112x112
+  dropout3d_p: 0.3    # recalibré (model5_A : 0.5)
+  drop_path_rate: 0.1        # recalibré (model5_A : 0.1)
+  embed_dim: 512
+  n_heads: 8
+  n_temporal_layers: 3 # 196 tokens -> 2 blocs justifié
+  transformer_dropout: 0.2  # recalibré (model5_A : 0.4)
+  transformer_drop_path_rate: 0.3
+  head_dropout: 0.3    # recalibré (model5_A : 0.5)
+  use_tsm: true
+  tsm_fold_div: 8

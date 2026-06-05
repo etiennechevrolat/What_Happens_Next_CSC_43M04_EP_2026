@@ -1,0 +1,27 @@
+# @package _global_
+model:
+  name: videomae_v2
+  pretrained: false
+  num_classes: ${num_classes}  # ignoré en pretrain, gardé pour compat hydra
+  # Patch / tubelet
+  img_size: 224
+  tubelet_t: 2          # T=4 / 2 = 2 frames de tubelet
+  patch_size: 16
+  in_chans: 3
+  # Encoder = ViT-Base, dim/heads matchent stage 3 de model6
+  encoder_dim: 768
+  encoder_depth: 12
+  encoder_heads: 12
+  # Decoder léger
+  decoder_dim: 384
+  decoder_depth: 4
+  decoder_heads: 6
+  mlp_ratio: 4
+  # Masking
+  mask_ratio: 0.75          # encoder masking (tube). Paper: 0.75-0.90
+  decoder_mask_ratio: 0.5   # dual masking : fraction des positions masquées
+                            # qui sont effectivement décodées
+  # Regularisation (en pretrain, on garde minimal)
+  dropout: 0.0
+  drop_path_rate: 0.0
+  norm_pix_loss: true

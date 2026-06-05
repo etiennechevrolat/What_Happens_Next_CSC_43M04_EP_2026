@@ -1,0 +1,6 @@
+# @package _global_
+defaults:
+  - override /model: model4_A
+
+dataset:
+  num_frames: 4

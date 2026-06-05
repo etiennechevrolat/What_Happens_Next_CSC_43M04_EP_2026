@@ -1,0 +1,11 @@
+# @package _global_
+model:
+  name: model4_A
+  pretrained: false
+  num_classes: ${num_classes}
+  embed_dim: 512
+  n_heads: 8
+  n_temporal_layers: 3   # commence par 1, monte à 2 si sous-fit
+  dropout_rate: 0.5
+  drop_path_rate: 0.15
+  head_dropout: 0.4

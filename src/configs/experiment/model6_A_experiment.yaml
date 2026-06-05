@@ -1,0 +1,16 @@
+# @package _global_
+defaults:
+  - override /model: model6_A
+
+dataset:
+  num_frames: 4
+
+training:
+  mixup_alpha: 0.3
+  cutmix_alpha: 0.5
+  mixup_prob: 0.3
+  cutmix_prob: 0.2
+  label_smoothing: 0.1
+  freeze_backbone_epochs: 0
+  lr: 3e-4
+  epochs: 100

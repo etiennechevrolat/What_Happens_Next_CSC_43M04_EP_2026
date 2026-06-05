@@ -1,0 +1,13 @@
+# @package _global_
+model:
+  name: model5_A           
+  pretrained: false
+  num_classes: ${num_classes}
+  dropout3d_p: 0.5
+  drop_path_rate: 0.1
+  embed_dim: 512
+  n_heads: 4
+  n_temporal_layers: 2
+  transformer_dropout: 0.4
+  transformer_drop_path_rate: 0.1
+  head_dropout: 0.5

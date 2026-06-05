@@ -210,3 +210,7 @@ data/
 outputs/
 *.pt
 processed_data/
+
+# Challenge submissions + wandb run logs (regenerable, kept out of VCS)
+*.csv
+wandb/

@@ -1,0 +1,661 @@
+% CVPR 2024 style report — What Happens Next? (Track A + Track B)
+% Compile : pdflatex report.tex  (run from the repo root so figures/ resolves)
+
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+\usepackage{cvpr}              % style file from CVPR template
+\usepackage{times}
+\usepackage{epsfig}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage[breaklinks=true,bookmarks=false]{hyperref}
+
+\cvprfinalcopy   % retirer pour la version anonyme
+\def\cvprPaperID{****}
+\def\httilde{\mbox{\tt\raisebox{-.5ex}{\symbol{126}}}}
+
+\ifcvprfinal\pagestyle{empty}\fi
+
+% Graphics path so \includegraphics{x.png} finds files alongside report.tex
+\graphicspath{{./}{figures/}}
+
+% Compile-safe figure include: shows a placeholder box if the file is absent,
+% so the document always builds even before every figure has been generated.
+% Probes both ./ and figures/ (graphicspath then resolves the actual include).
+\newcommand{\safefig}[2][\columnwidth]{%
+  \IfFileExists{#2}%
+    {\includegraphics[width=#1]{#2}}%
+    {\IfFileExists{figures/#2}%
+      {\includegraphics[width=#1]{#2}}%
+      {\fbox{\begin{minipage}[c][3.0cm][c]{#1}\centering\ttfamily\scriptsize
+         [figure not found]\\\detokenize{#2}\end{minipage}}}}%
+}
+
+\begin{document}
+
+%==================================================================
+\title{Action recognition on a Curated Something-Something\,V2 Subset:\\ What Happens Next?}
+
+\author{Etienne CHEVROLAT \quad Alfred RUSCHER\\
+\'Ecole polytechnique}
+
+\maketitle
+
+%==================================================================
+\begin{abstract}
+We study the two subproblems of the \emph{What Happens Next} challenge:
+classify human-object interactions into 33 SSV2-derived classes from
+clips of \textbf{only 4 frames} per video. In \textbf{Track A} (no external
+data) we design and train four architectures entirely from scratch --- a
+CNN$+$Transformer family, an R(2+1)D backbone coupled to a spatio-temporal
+Transformer, and a vanilla ViT-B initialised by a \emph{from-scratch}
+VideoMAE\,v2 pre-training on the challenge data --- and show that held-out
+accuracy saturates near~$0.41$: the R(2+1)D$+$Transformer reaches~$0.406$
+at $39.8$\,M parameters and $4.2$\,ms/clip, on par with the $86$\,M
+self-supervised ViT-B ($0.409$). In \textbf{Track B} we benchmark 11
+architectures of widely different sizes ($36$\,M to $7$\,B parameters) and
+five families of overfitting mitigations on top of a VideoMAE-B baseline
+that reaches~$0.6096$. Our best single model is a head-only fine-tune of
+V-JEPA\,2 ViT-L SSV2 with linear temporal upsampling, reaching~$0.638$. The
+$\sim$20\,pt gap between the best from-scratch and the best pre-trained
+model isolates \emph{pre-training, not architecture}, as the dominant factor
+at this data and frame budget.
+\end{abstract}
+
+%==================================================================
+\section{Problem statement}
+\label{sec:intro}
+
+The dataset is a curated 33-class subset of Something-Something\,V2
+(SSV2)~\cite{goyal2017something}, organised as $44{,}993$ training
+clips (none of which are labelled 27), $6{,}746$ validation (labelled) clips and $6{,}913$ test clips (unlabelled) to create a graded submission for the challenge. Each clip is delivered as
+4 ($224\times 224$) JPEG frames, which is far below the temporal
+resolution at which video foundation models are typically
+pre-trained~(16--64 frames) as well as below their spatial resolution training (below their training spatial resolution ($384\times 384$ for V-JEPA 2 ViT-g fpc64-384, for instance)). The challenge therefore stresses
+\emph{(i)}~transfer from a frame-rich architecture to a sparse
+deployment regime, and \emph{(ii)}~generalisation under a small
+labelled-data budget.
+
+%==================================================================
+\section{Method}
+\label{sec:method}
+
+\subsection{Track B}
+
+\subsubsection{Architectures surveyed}
+\label{sec:method:archs}
+VideoMAE~\cite{tong2022videomae} specialises in reconstructing
+hidden pixels. As our problem is characterised by the lack of
+frames, we first focused on the 86\,M-parameter VideoMAE-B, before
+trying bigger models and finally focusing on
+V-JEPA\,2~\cite{bardes2024vjepa2}.
+
+All in all, we tested 11 families spanning four design philosophies:
+\emph{(a)~masked-pixel pretraining} (VideoMAE-B/L/v2-G~\cite{tong2022videomae},
+Hiera-B/Huge~\cite{ryali2023hiera}); \emph{(b)~joint-embedding predictive architectures}
+(V-JEPA\,2 ViT-L and ViT-g~\cite{bardes2024vjepa2}); \emph{(c)~image-language contrastive
+backbones} (X-CLIP~\cite{ni2022xclip}, SigLIP-2 Giant~\cite{tschannen2025siglip2},
+DINOv3~\cite{oquab2023dinov2}); and \emph{(d)~attention-only video transformers}
+(TimeSformer~\cite{bertasius2021timesformer}, MViT-v2~\cite{fan2021multiscale},
+Swin3D~\cite{liu2022videoswin}, InternVideo2~6B~\cite{wang2024internvideo2}). We also
+evaluated two vision-language models, Qwen-VL~7B~\cite{bai2023qwenvl} and
+LLaVA-Mistral~7B~\cite{liu2023llava}. For each family we kept the public
+SSV2-finetuned weights when available. For backbones without an SSV2 checkpoint we used
+the closest available (Kinetics-400 or DINO/SigLIP raw features) and
+added the temporal pooler at the head level. The results are visible in Figure~\ref{fig:acc-vs-params}.
+
+\subsubsection{Anti-overfit toolbox}
+\label{sec:method:overfit}
+After optimizing the hyperparameters of VideoMAE-B, we encountered a plateau where the experiments would reach a training accuracy higher than $0.70$ in 2-3 epochs, while the validation accuracy would remain below $0.61$. We tried different techniques to bridge this generalization gap:
+
+\paragraph{Classical regularisation} Dropout
+($\{0.05,...,0.50\}$), weight decay
+($\{10^{-5},...,10^{-2}\}$), label smoothing
+($\{0,...,0.50\}$) and gradient clipping
+($\|g\|_2 \le 1$); see Sec.~\ref{sec:results}.
+
+\paragraph{Parameter-efficient fine-tuning}
+\emph{(i)}~LoRA adapters of rank
+$r \in \{8,16,32,64,128\}$ on all 40 blocks of V-JEPA\,2 ViT-g (180\,M
+trainable for $r{=}16$); \emph{(ii)}~block freezing controlled by
+\textit{num\_frozen\_blocks} $\in \{0,...,40\}$; \emph{(iii)}~layer-wise
+LR decay (LLRD) with factor~$0.80$; \emph{(iv)}~differential learning
+rates between the backbone and the new head, parameterised by
+\textit{backbone\_lr\_scale} $\in [0.02,1.0]$; \emph{(v)} Head MLP / attention pool / cross attention pair; \emph{(vi)} Multi-scale temporal features and number of temporal layers; \emph{(vii)} Choice of optimizer (AdamW, Prodigy, gradient accumulation, etc.)
+
+\paragraph{Augmentation} Random resized crop, horizontal flip
+($p{=}0.5$, not to be applied to classes 18 "pulling something from left to right" and 19 "pulling something from right to left"), colour jitter ($p{=}0.8$, strength $0.35$), Gaussian blur
+($p{=}0.1$), and temporal equivariant reverse, where reversing
+the clip flips the label between matched action pairs (e.g. "opening something"
+(class 10) $\leftrightarrow$ "closing something"
+(class 0)). For input mixing we use
+\textbf{MixUp}~\cite{zhang2018mixup}:
+\begin{equation}
+\tilde{x} = \lambda x_i + (1-\lambda) x_j,\quad
+\tilde{y} = \lambda y_i + (1-\lambda) y_j,
+\end{equation}
+with $\lambda \sim \text{Beta}(\alpha,\alpha)$, $\alpha=0.4$.
+
+\paragraph{Trajectory stabilisation and Class re-weighting} EMA on the model weights with
+decay~$0.9998$, cosine LR schedule with $3$ warm-up epochs and a
+floor of~$10^{-7}$. Inverse-frequency class weights to
+counter the long-tail distribution of Track B.
+
+\subsection{Going beyond VideoMAE-B}
+\label{sec:method:beyond}
+Following the intermediary results presentation by the challenge's best teams, two main directions were explored:
+\emph{(a)}~LoRA on V-JEPA\,2 ViT-g with four head/LoRA learning-rate
+combinations (a~$3\times 3$ grid over $\{10^{-3},10^{-2}\}$ for the head
+and a multiplicative scale~$\in[0.05,1]$ for LoRA); and
+\emph{(b)}~head-only fine-tuning of V-JEPA\,2 ViT-L SSV2 where the 4
+input frames are linearly interpolated (LERP) to fill the~16 input
+positions expected by the tube tokeniser, restricting the
+174-way head to the 33 SSV2 templates that appear in Track B.
+
+\subsection{Track A: learning from scratch}
+\label{sec:method:trackA}
+
+Track A forbids external pre-training, so every weight is learned on the
+$44{,}993$ labelled clips of the curated SSV2 subset, at the same 4-frame
+budget as Track B. We explored a deliberate capacity / inductive-bias
+ladder of four custom architectures (all implemented from scratch in
+\texttt{src/models/}).
+
+\paragraph{(1) CNN spatial encoder $\to$ temporal Transformer (12.9\,M).}
+A shared ResNet-18-style encoder (7$\times$7 stem, four 2-block stages,
+$64\!\to\!512$ channels) maps each of the 4 frames to a single vector via
+global average pooling. The 4 vectors receive a learned temporal position
+embedding and pass through 2 self-attention blocks; mean-pooling feeds a
+linear head. The temporal Transformer sees only $T{=}4$ tokens, so its
+capacity is largely under-used.
+
+\paragraph{(2) CNN spatial encoder $\to$ spatio-temporal Transformer (17.8\,M).}
+We drop the spatial pooling and keep the $7\times7$ feature grid, yielding
+$4\times49 = 196$ spatio-temporal tokens with a \emph{factorised} position
+embedding $\mathrm{PE}(t,p)=\mathrm{pos}_t+\mathrm{pos}_p$. A joint
+Transformer then reasons over space and time. Despite $16\times$ more
+tokens, accuracy does \emph{not} improve: a ResNet-18 trained from scratch
+on $45$k clips is data-starved, and extra tokens cannot manufacture the
+motion signal the convolutions failed to extract.
+
+\paragraph{(3) R(2+1)D backbone + spatio-temporal Transformer (39.8\,M).}
+We replace the 2D CNN with an R(2+1)D-18 stem~\cite{tran2018closer}, which
+factorises every 3D convolution into a spatial $(1,3,3)$ and a temporal
+$(3,1,1)$ kernel and therefore models motion natively. Three targeted
+additions bridge the small-$T$ regime: \emph{(i)}~a parameter-free Temporal
+Shift Module~\cite{lin2019tsm} in every residual block, forcing early
+cross-frame mixing; \emph{(ii)}~removal of the spatial pool so the stage-4
+output is flattened into $4\times7\times7=196$ tokens fed to a 3-layer
+factorised-PE Transformer; \emph{(iii)}~a learned attention-pooling head in
+place of a CLS token. This model is initialised from the plain R(2+1)D run
+and trained with a 5-epoch backbone freeze, MixUp/CutMix, stochastic depth
+and \texttt{Dropout3d}.
+
+\paragraph{(4) Self-supervised MAE pre-training + vanilla ViT-B (86.3\,M).}
+Finally we test whether self-supervision \emph{on the challenge data alone}
+can rival external pre-training. We re-implement VideoMAE\,v2~\cite{tong2022videomae}
+from scratch --- tube masking, dual masking, a light 4-block decoder and a
+norm-pixel reconstruction loss --- and pre-train its ViT-B encoder
+(tubelet $2\times16\times16$, $\dim{=}768$, depth 12) on the
+\emph{unlabelled} training frames. The encoder is then loaded $100\%$ into a
+ViT-B classifier and fine-tuned with layer-wise LR decay (LLRD~$0.75$),
+5-epoch warm-up, cosine schedule, MixUp/CutMix and label smoothing $0.1$.
+
+%==================================================================
+\section{Results}
+\label{sec:results}
+
+\subsection{Scaling laws on Track B}
+
+\begin{figure}[t]
+  \centering
+  \safefig{fig_acc_vs_params.png}
+  \caption{Top-1 \emph{val\_dir} accuracy as a function of backbone size,
+           best result per family. Small dots show individual runs;
+           large markers indicate the family best. The dashed
+           line~$0.638$ corresponds to the V-JEPA\,2 ViT-L
+           single-model record (305\,M parameters).}
+  \label{fig:acc-vs-params}
+\end{figure}
+
+Figure~\ref{fig:acc-vs-params} establishes the headline finding of
+our study: on Track B, accuracy saturates around 300--600\,M
+parameters and then plateaus, even though some pre-trained models
+reach 6--7\,B parameters. The image-language contrastive backbones
+(SigLIP-2, DINOv3, X-CLIP) cluster between 0.46 and 0.53. The
+SSV2-pretrained masked-pixel models reach 0.59--0.61. V-JEPA\,2 ViT-L
+is the only family that exceeds the VideoMAE-B baseline, at 305\,M
+parameters.
+
+\subsection{Single-axis sweeps on VideoMAE-B}
+\begin{figure*}[t]
+  \centering
+  \safefig[\textwidth]{fig_opt_sweeps.png}
+  \caption{Single-axis sweeps starting from the best VideoMAE-B
+           configuration (other axes fixed at their optimum). The dashed
+           gold line shows the joint optimum~$0.6086$ obtained when all
+           eight axes are simultaneously optimised. Error bars are
+           $\pm 1\sigma$ over three random seeds.}
+  \label{fig:sweeps}
+\end{figure*}
+Figure~\ref{fig:sweeps} summarises the eight single-axis sweeps.
+A few  remarks:
+(a)~head width plateaus at $4096$, with a slight \emph{drop} at $8192$
+attributable to overfitting on the training set;
+(b)~dropout has a flat optimum around $0.10$--$0.15$;
+(c)~label smoothing peaks at $0.20$, in line with~\cite{szegedy2016rethinking};
+(d)~weight decay shows the classic $5\!\cdot\!10^{-4}$ optimum;
+(g)~freezing any of the 12 VideoMAE-B blocks already costs accuracy,
+which contrasts with our V-JEPA\,2 experiments where freezing 32 of
+40 blocks helps. The capacity-to-data ratio is more sensitive for
+VideoMAE-B.
+
+The combination of the optimized hyperparameters gives us the configuration
+\begin{center}\small
+\begin{tabular}{@{}rl@{\quad}rl@{}}
+$h$           & 4096                 & dropout         & 0.10 \\
+label smooth. & 0.20                 & weight decay    & $5{\cdot}10^{-4}$ \\
+epochs        & 30                   & bb\_lr\_scale   & 0.5 \\
+frozen blocks & 0                    & frames          & 4 \\
+EMA decay     & 0.9998               &                 & \\
+\end{tabular}
+\end{center}
+yielding $0.6086$ top-1 accuracy.
+
+\subsection{Anatomy of the best run}
+
+\begin{figure}[t]
+  \centering
+  \safefig{fig_opt_curves.png}
+  \caption{Train, internal-val and held-out (\emph{val\_dir}) accuracy
+           and loss during the best VideoMAE-B run. The gold star marks
+           the early-stopping checkpoint at epoch 30.}
+  \label{fig:curves}
+\end{figure}
+
+Figure~\ref{fig:curves} shows that the model continues to fit the
+training set well past the point at which the held-out accuracy
+plateaus, leading to a residual train/val gap of $\sim$28\,pts. Adding
+mixup, EMA and stronger label smoothing reduces this gap by
+$\sim$3\,pts but does not close it.
+
+\begin{figure}[t]
+  \centering
+  \safefig{fig_best_confusion.png}
+  \caption{Confusion matrix of the best VideoMAE-B configuration on
+           \emph{val\_dir}. The six pairs of classes most often confused
+           are marked with a red cross; they all correspond to
+           visually similar transitive actions (e.g.\ ``moving X''
+           vs.\ ``putting X'').}
+  \label{fig:confusion}
+\end{figure}
+
+Figure~\ref{fig:confusion} illustrates the dominant residual errors.
+Five of the 33 classes account for over a third of the remaining
+errors; these are the classes whose template description differs by
+a single preposition (\emph{onto} vs.\ \emph{into}) or by direction
+(\emph{up} vs.\ \emph{down}). These ambiguities are exactly the cases
+where having only 4 frames is most penalising.
+Another result is that some on the temporally exchanged class (0 and 10 for instance) are both in the most baddly predicted ones. We stopped using this augmentation and the model yielded an accuracy of~$0.6096$
+
+\subsection{Going beyond: LoRA and head-only V-JEPA\,2}
+
+LoRA on V-JEPA\,2 ViT-g converges quickly (validation accuracy of
+$0.64$ after a single epoch with head learning rate~$10^{-3}$,
+backbone-LR scale~$1.0$), but does not exceed the head-only
+V-JEPA\,2 ViT-L recipe (Section~\ref{sec:method:beyond}), which
+attains $\mathbf{0.638}$ top-1 on \emph{val\_dir} in two epochs;
+the full grid of tested configurations is shown in
+Fig.~\ref{fig:lora}.
+A frame-interpolation ablation shows that linear interpolation
+between the four source frames underperforms against naive frame
+repetition ($-6.6$\,pts) and is on par with Gaussian temporal
+blending~($\pm 0.5$\,pt) (see Fig.~\ref{fig:upsampling} for the different interpolation tested, with the resulting top1 valdir accuracy of VideoMAE-B best configuration in Table \ref{tab:upsampling} ). This could be because the models were
+pretrained on clear-cut pictures. Adding 4-clip averaging during
+inference \emph{degrades} accuracy on this dataset, contrary to
+typical SSV2 evaluation protocols, presumably because the action of
+interest spans the whole clip.
+
+\begin{figure}[!ht]
+  \centering
+  \safefig{lora_sweep_results.png}
+  \caption{LoRA fine-tuning sweep: best \emph{val\_dir} top-1
+           accuracy per architecture~$\times$~LoRA rank.}
+  \label{fig:lora}
+\end{figure}
+
+\subsection{Track A: results}
+\label{sec:results:trackA}
+
+\begin{figure}[t]
+  \centering
+  \safefig{fig_trackA_acc_vs_params.png}
+  \caption{Track A held-out top-1 vs.\ trainable parameters (log scale).
+           Small dots are individual runs, large markers the family best.
+           Dashed lines recall the \emph{pre-trained} Track B references
+           (VideoMAE-B $0.6096$, V-JEPA\,2 ViT-L $0.638$). From-scratch
+           accuracy saturates near $0.41$, $\sim$20\,pts below any
+           pre-trained backbone.}
+  \label{fig:trackA-scaling}
+\end{figure}
+
+\begin{table}[t]
+  \centering\small
+  \begin{tabular}{@{}llcccc@{}}
+    \toprule
+    Model & Architecture & Params & top-1 & top-5 & ms/clip \\
+    \midrule
+    m1.2 & CNN $\to$ ViT$_t$              & 12.9\,M & 0.244 & 0.548 & 1.3 \\
+    m2   & CNN $\to$ ST-ViT               & 17.8\,M & 0.229 & 0.535 & 1.6 \\
+    m5B  & R(2+1)D+TSM+ST-ViT             & 39.8\,M & \textbf{0.406} & 0.719 & 4.2 \\
+    m7   & MAE-ViT-B (self-sup.\ on train)& 86.3\,M & \textbf{0.409} & 0.736 & 9.2 \\
+    \bottomrule
+  \end{tabular}
+  \caption{From-scratch Track A models on the held-out \emph{val\_dir}
+           ($6{,}745$ clips). Best held-out checkpoint per family;
+           latency is forward-only per clip on a single GPU.}
+  \label{tab:trackA}
+\end{table}
+
+Figure~\ref{fig:trackA-scaling} and Table~\ref{tab:trackA} give the
+headline result for Track A: \emph{without} external pre-training,
+accuracy plateaus around $0.41$ and never approaches the $0.61$ reached
+by an SSV2-pre-trained VideoMAE-B. The R(2+1)D$+$Transformer (m5B) and the
+self-supervised ViT-B (m7) tie within noise ($0.406$ vs.\ $0.409$), but
+m5B reaches it with $2.2\times$ fewer parameters and at less than half the
+latency ($4.2$ vs.\ $9.2$\,ms), making it the best accuracy/compute
+trade-off of the track. The two small CNN$+$Transformer models
+($\le 18$\,M) lag by $16$--$18$\,pts, confirming that capacity \emph{and}
+an explicit motion prior are both needed in this regime.
+
+\begin{figure*}[t]
+  \centering
+  \safefig[\textwidth]{fig_trackA_model7_curves.png}
+  \caption{model7\_A fine-tuning. \emph{Left:} layer-wise LR decay is
+           decisive --- without it the held-out accuracy plateaus at
+           $0.26$, with it (plus diverse augmentation) it reaches $0.41$.
+           \emph{Right:} on a clean 50-epoch run, the internal-val curve
+           sits $\sim$17\,pts above the held-out curve, the same
+           generalisation gap that dominates Track B.}
+  \label{fig:trackA-m7}
+\end{figure*}
+
+\paragraph{Fine-tuning the self-supervised ViT-B.}
+Figure~\ref{fig:trackA-m7} shows that a vanilla ViT-B pre-trained
+\emph{only on the challenge data} is viable but brittle. Layer-wise LR
+decay with warm-up is the single most important ingredient: a naive
+constant-LR fine-tune plateaus at $0.26$ held-out, whereas
+LLRD$+$warm-up reaches $0.39$--$0.41$. Conversely, a poor pre-training
+initialisation collapses fine-tuning to $0.027$ (near chance), so the
+value of the self-supervised stage is entirely gated by its quality. The
+persistent $\sim$17\,pt gap between the internal split and the true
+held-out set mirrors the $\sim$28\,pt train/val gap of Track B and points
+again to a data, not architecture, bottleneck.
+
+\begin{figure}[t]
+  \centering
+  \safefig{fig_trackA_mae_pretrain.png}
+  \caption{Self-supervised VideoMAE\,v2 pre-training from scratch
+           (norm-pixel MSE). A $0.75$ tube-mask ratio converges smoothly
+           to $\sim\!0.30$; pushing the encoder mask to $0.90$ without
+           extra stabilisation diverges to NaN around epoch~29 (dotted).}
+  \label{fig:trackA-mae}
+\end{figure}
+
+\paragraph{Pre-training stability.}
+Figure~\ref{fig:trackA-mae} reports the masked-reconstruction loss. The
+$0.75$ encoder mask ratio is stable and reaches a norm-pixel MSE of
+$\sim\!0.30$, while the more aggressive $0.90$ ratio --- attractive for its
+higher token-drop efficiency --- diverges to NaN early unless re-stabilised,
+illustrating how sensitive from-scratch video MAE is at this data scale.
+
+\begin{figure}[t]
+  \centering
+  \safefig{fig_trackA_confusion.png}
+  \caption{Confusion matrix (row-normalised) of the best from-scratch
+           model on \emph{val\_dir}. Red crosses mark the six most
+           confused class pairs; as in Track B they are visually similar
+           transitive actions separated only by a preposition or a
+           direction, i.e.\ exactly where 4 frames carry too little motion
+           information.}
+  \label{fig:trackA-confusion}
+\end{figure}
+
+\paragraph{Error structure.}
+The dominant confusions of the best from-scratch model
+(Fig.~\ref{fig:trackA-confusion}) are semantic near-twins that 4 frames
+cannot disambiguate: \emph{pretending} vs.\ real actions
+(\emph{pretending to put something into something}
+$\to$ \emph{putting something into something}, $40\%$;
+\emph{pretending to throw} $\to$ \emph{throwing}, $23\%$),
+preposition swaps (\emph{pouring something out of something}
+$\to$ \emph{pouring something into something}, $23\%$) and direction
+swaps (\emph{pulling right-to-left} $\to$ \emph{pulling left-to-right},
+$23\%$). These are exactly the classes whose label lives in the motion
+\emph{between} frames, which the sparse 4-frame sampling discards --- the
+same failure mode observed for the pre-trained Track\,B models.
+
+%==================================================================
+\section{Conclusion and future work}
+\label{sec:conclusion}
+
+Our main findings are: \emph{(i)}~V-JEPA\,2 ViT-L (305\,M parameters)
+is the best single-model architecture on Track\,B, reaching
+$0.638$ \emph{val\_dir} accuracy and improving on the official
+VideoMAE-B baseline ($0.6086$) by $+3.3$\,pts; \emph{(ii)}~scaling
+beyond 300\,M parameters is unproductive at the data scale of
+Track\,B, with 6--7\,B-parameter foundation models underperforming
+both VideoMAE-B and V-JEPA\,2 ViT-L; \emph{(iii)}~on Track\,A, the best
+from-scratch model tops out at $0.409$ --- some $20$\,pts below the
+weakest pre-trained backbone --- and the R(2+1)D$+$Transformer matches the
+self-supervised ViT-B at a fraction of its cost; \emph{(iv)}~the residual
+generalisation gap ($\sim$28\,pts on Track\,B, $\sim$17\,pts on Track\,A)
+cannot be closed by any of the five classes of regularisation we explored,
+suggesting that more labelled data, not more architecture, is the binding
+constraint.
+
+Future directions include: cross-architecture ensembling with
+per-class softmax weighting (where VideoMAE and V-JEPA-2 already
+show complementary error patterns); self-supervised continued
+pre-training on the unlabelled Track-B train partition; learning
+the 4\,$\rightarrow$\,16 frame upsampling jointly with the
+classifier instead of using a hand-crafted interpolation; and
+distilling V-JEPA\,2 ViT-g into a smaller deployment-friendly head.
+
+Another avenue we did not have time to explore
+is to combine MGMAE~\cite{huang2023mgmae} with a strong optical-flow front-end such
+as SEA-RAFT~\cite{wang2024searaft}. The 28-pt train/val gap we
+report is partly a symptom of the model latching onto static
+appearance cues --- texture, object identity, background --- rather
+than the motion pattern that actually defines the
+\emph{Something\,Something} classes (e.g.\ \texttt{Pulling left
+to right} vs.\ \texttt{Pulling right to left}). Pre-computing
+dense bidirectional flow between the four sampled frames with
+SEA-RAFT (state-of-the-art accuracy on Sintel/KITTI at
+$<10$\,ms per pair) and either (i) feeding the resulting flow
+maps as an extra two-channel stream into a dual-pathway
+VideoMAE, or (ii) using the SEA-RAFT flow as the motion prior
+that drives MGMAE's motion-guided masking during continued
+masked-pixel pre-training, would inject the explicit motion
+signal that 4-frame sampling currently discards. We expect this
+to shrink the train/val gap more effectively than any of the
+appearance-based regularisers investigated in Sec.~\ref{sec:results},
+and to disproportionately help the symmetric-pair classes that
+dominate our confusion matrix.
+
+%==================================================================
+{\small
+\begin{thebibliography}{99}
+
+\bibitem{bai2023qwenvl}
+J.~Bai, S.~Bai, S.~Yang, S.~Wang, S.~Tan, P.~Wang, J.~Lin, C.~Zhou, and J.~Zhou.
+\newblock {Qwen-VL: A Versatile Vision-Language Model for Understanding, Localization, Text Reading, and Beyond}.
+\newblock arXiv preprint arXiv:2308.12966, 2023.
+
+\bibitem{bardes2024vjepa2}
+A.~Bardes, Q.~Garrido, X.~Chen, M.~Assran, N.~Ballas, et~al.
+\newblock {V-JEPA 2: Self-Supervised Video Models from One Million Hours of Internet Video}.
+\newblock arXiv preprint, 2024.
+
+\bibitem{bertasius2021timesformer}
+G.~Bertasius, H.~Wang, and L.~Torresani.
+\newblock {Is Space-Time Attention All You Need for Video Understanding?}
+\newblock In \emph{International Conference on Machine Learning (ICML)}, 2021.
+
+\bibitem{fan2021multiscale}
+H.~Fan, B.~Xiong, K.~Mangalam, Y.~Li, Z.~Yan, J.~Malik, and C.~Feichtenhofer.
+\newblock {Multiscale Vision Transformers}.
+\newblock In \emph{IEEE/CVF International Conference on Computer Vision (ICCV)}, 2021.
+
+\bibitem{goyal2017something}
+R.~Goyal, S.~Ebrahimi~Kahou, V.~Michalski, J.~Materzynska, S.~Westphal, H.~Kim, et~al.
+\newblock {The ``Something Something'' Video Database for Learning and Evaluating Visual Common Sense}.
+\newblock In \emph{IEEE International Conference on Computer Vision (ICCV)}, 2017.
+
+\bibitem{hu2022lora}
+E.~J. Hu, Y.~Shen, P.~Wallis, Z.~Allen-Zhu, Y.~Li, S.~Wang, L.~Wang, and W.~Chen.
+\newblock {LoRA: Low-Rank Adaptation of Large Language Models}.
+\newblock In \emph{International Conference on Learning Representations (ICLR)}, 2022.
+
+\bibitem{liu2023llava}
+H.~Liu, C.~Li, Q.~Wu, and Y.~J. Lee.
+\newblock {Visual Instruction Tuning}.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2023.
+
+\bibitem{liu2022videoswin}
+Z.~Liu, J.~Ning, Y.~Cao, Y.~Wei, Z.~Zhang, S.~Lin, and H.~Hu.
+\newblock {Video Swin Transformer}.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)}, 2022.
+
+\bibitem{ni2022xclip}
+B.~Ni, H.~Peng, M.~Chen, S.~Zhang, G.~Meng, J.~Fu, S.~Xiang, and H.~Ling.
+\newblock {Expanding Language-Image Pretrained Models for General Video Recognition}.
+\newblock In \emph{European Conference on Computer Vision (ECCV)}, 2022.
+
+\bibitem{oquab2023dinov2}
+M.~Oquab, T.~Darcet, T.~Moutakanni, H.~Vo, M.~Szafraniec, V.~Khalidov, et~al.
+\newblock {DINOv2: Learning Robust Visual Features without Supervision}.
+\newblock arXiv preprint arXiv:2304.07193, 2023.
+
+\bibitem{ryali2023hiera}
+C.~Ryali, Y.-T. Hu, D.~Bolya, C.~Wei, H.~Fan, P.-Y. Huang, V.~Aggarwal, A.~Chowdhury, O.~Poursaeed, J.~Hoffman, J.~Malik, Y.~Li, and C.~Feichtenhofer.
+\newblock {Hiera: A Hierarchical Vision Transformer without the Bells-and-Whistles}.
+\newblock In \emph{International Conference on Machine Learning (ICML)}, 2023.
+
+\bibitem{szegedy2016rethinking}
+C.~Szegedy, V.~Vanhoucke, S.~Ioffe, J.~Shlens, and Z.~Wojna.
+\newblock {Rethinking the Inception Architecture for Computer Vision}.
+\newblock In \emph{IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}, 2016.
+
+\bibitem{tong2022videomae}
+Z.~Tong, Y.~Song, J.~Wang, and L.~Wang.
+\newblock {VideoMAE: Masked Autoencoders are Data-Efficient Learners for Self-Supervised Video Pre-Training}.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2022.
+
+\bibitem{tran2018closer}
+D.~Tran, H.~Wang, L.~Torresani, J.~Ray, Y.~LeCun, and M.~Paluri.
+\newblock {A Closer Look at Spatiotemporal Convolutions for Action Recognition}.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)}, 2018.
+
+\bibitem{lin2019tsm}
+J.~Lin, C.~Gan, and S.~Han.
+\newblock {TSM: Temporal Shift Module for Efficient Video Understanding}.
+\newblock In \emph{IEEE/CVF International Conference on Computer Vision (ICCV)}, 2019.
+
+\bibitem{tschannen2025siglip2}
+M.~Tschannen, A.~Gritsenko, X.~Wang, M.~F. Naeem, I.~Alabdulmohsin, et~al.
+\newblock {SigLIP 2: Multilingual Vision-Language Encoders with Improved Semantic Understanding, Localization, and Dense Features}.
+\newblock arXiv preprint arXiv:2502.14786, 2025.
+
+\bibitem{wang2024internvideo2}
+Y.~Wang, K.~Li, X.~Li, J.~Yu, Y.~He, G.~Chen, B.~Pei, R.~Zheng, et~al.
+\newblock {InternVideo2: Scaling Foundation Models for Multimodal Video Understanding}.
+\newblock In \emph{European Conference on Computer Vision (ECCV)}, 2024.
+
+\bibitem{zhang2018mixup}
+H.~Zhang, M.~Cisse, Y.~N. Dauphin, and D.~Lopez-Paz.
+\newblock {mixup: Beyond Empirical Risk Minimization}.
+\newblock In \emph{International Conference on Learning Representations (ICLR)}, 2018.
+
+\bibitem{wang2024searaft}
+Y.~Wang, L.~Lipson, and J.~Deng.
+\newblock {SEA-RAFT: Simple, Efficient, Accurate RAFT for Optical Flow}.
+\newblock In \emph{European Conference on Computer Vision (ECCV)}, 2024.
+
+\bibitem{huang2023mgmae}
+B.~Huang, Z.~Zhao, G.~Zhang, Y.~Qiao, and L.~Wang.
+\newblock {MGMAE: Motion Guided Masking for Video Masked Autoencoding}.
+\newblock In \emph{IEEE/CVF International Conference on Computer Vision (ICCV)}, 2023.
+
+\end{thebibliography}
+}
+
+\appendix
+\section{Classical data augmentation}
+\label{sec:augmentation}
+
+To narrow the train/val gap reported in
+Sec.~\ref{sec:method:overfit}, every training run applies a stack of
+classical, label-preserving image transformations to each of the four
+source frames \emph{before} the upsampling step described in
+Sec.~\ref{sec:upsampling}. The same random parameters are sampled
+\emph{once per clip} and broadcast across the four frames, so that
+temporal coherence — the very signal that distinguishes \emph{Pulling
+left to right} from \emph{Pulling right to left} — is preserved.
+
+\begin{figure*}[!ht]
+  \centering
+  \safefig[\textwidth]{fig_augmentation_real.png}
+  \caption{Seven classical data-augmentation transforms applied to one
+           frame of the Track\,B video shown in
+           Fig.~\ref{fig:upsampling} (class~3, \emph{Folding
+           something}). The same random parameters are shared across
+           the four source frames of a clip so that motion cues are
+           not destroyed. \emph{Colour jitter} and \emph{random
+           resized crop} are the largest individual contributors
+           ($+1.4$ and $+1.1$\,pt val\_dir respectively), MixUp adds a
+           further $+0.6$\,pt, and temporal-reverse doubles the
+           effective sample count for the 16 directional classes.}
+  \label{fig:augmentation}
+\end{figure*}
+
+\section{Frame upsampling strategies}
+\label{sec:upsampling}
+
+The VideoMAE and V-JEPA\,2 tube tokeniser (kernel 2 frames~$\times$~16$\times$16~px)
+expects 16 input frames per clip, while Track\,B delivers only 4. We
+compared six strategies to bridge this gap before feeding the
+backbone (Fig.~\ref{fig:upsampling}).
+
+\begin{figure*}[!ht]
+  \centering
+  \safefig[\textwidth]{fig_frame_upsampling_real.png}
+  \caption{Six strategies for upsampling the 4~source frames to the
+           sequence expected by VideoMAE-B and V-JEPA\,2's tube tokeniser.
+           Each output position is colour-coded by the convex combination
+           of the four source colours dictated by the method. The methods' efficiency on VideoMAE-B top1 accuracy are sumarized in Table \ref{tab:upsampling} }
+  \label{fig:upsampling}
+\end{figure*}
+
+\begin{table}[!ht]
+  \centering
+  \small
+  \begin{tabular}{@{}lcccccc@{}}
+    \toprule
+    method
+                    & replicate         & nearest & cubic & Gaussian & LERP & tile  \\
+    \midrule
+    \emph{val\_dir} & \textbf{0.6086}   & 0.598   & 0.588 & 0.582 & 0.54     & 0.412 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Top-1 \emph{val\_dir} accuracy for each upsampling strategy.
+           The $-6.6$\,pt drop between replicate and LERP is consistent
+           with the SSV2 distribution being dominated by sharp natural
+           frames rather than blended intermediates.}
+  \label{tab:upsampling}
+\end{table}
+
+\end{document}

@@ -1,0 +1,19 @@
+# @package _global_
+model:
+  name: model6_A
+  pretrained: false
+  num_classes: ${num_classes}
+  # Stem + 3 stages, /32 total -> 224 -> 7x7 final, window=7.
+  # Cible 40-80M params : ~58M avec cette config.
+  stem_channels: 96
+  stage_channels: [192, 384, 768]
+  num_blocks: [2, 4, 2]
+  n_heads: [6, 12, 12]    # head_dim = 32 / 32 / 64
+  strides: [2, 2, 2]
+  window_size: 7
+  dropout: 0.1
+  drop_path_rate: 0.2
+  head_dropout: 0.3
+  expand: 4
+  se_ratio: 0.25
+  mlp_ratio: 4

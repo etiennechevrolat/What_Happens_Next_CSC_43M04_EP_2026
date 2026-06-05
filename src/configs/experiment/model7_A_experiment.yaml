@@ -1,0 +1,38 @@
+# @package _global_
+defaults:
+  - override /model: model7_A
+
+dataset:
+  num_frames: 4
+
+training:
+  # Init depuis le pretrain VideoMAEv2 (100 % du backbone récupéré)
+  videomae_pretrain_from: ${hydra:runtime.cwd}/videomae_v2_pretrain.pt
+
+  # Augmentations — recette MAE finetune (papier) :
+  # avec LLDR + warmup, on peut se permettre des aug agressives.
+  mixup_alpha: 0.8
+  cutmix_alpha: 1.0
+  mixup_prob: 0.5
+  cutmix_prob: 0.5
+  label_smoothing: 0.1
+
+  # Optim — LLDR ACTIVE
+  # base_lr s'applique à la tête ; chaque couche plus profonde reçoit
+  # base_lr * 0.75^(depth+1 - layer_id). Pour depth=12 :
+  #   patch_embed : lr * 0.75^13 ≈ 0.024
+  #   block 11    : lr * 0.75    ≈ 0.75
+  #   head        : lr           = 1.0
+  # NB: 1e-3 du papier MAE est calibré pour bs=1024. Ici bs=24 -> linear scaling
+  # donnerait ~2.3e-5 (trop bas, on perd l'intérêt de LLDR). 2e-4 est le compromis :
+  # head reste sous contrôle, backbone à ~5e-6 (très safe).
+  lr: 2e-4                  # base LR de la tête (head peak)
+  layer_decay: 0.75         # ⭐ Layer-wise LR decay
+  weight_decay: 0.05        # MAE finetune textbook
+  warmup_epochs: 5          # ⭐ critique pour ne pas flinguer les features
+  min_lr_ratio: 0.001       # cosine descend jusqu'à 1e-6
+  betas: [0.9, 0.95]        # β2 = 0.95 (MAE)
+  epochs: 50
+  batch_size: 24
+  num_workers: 8
+  freeze_backbone_epochs: 0  # inutile avec LLDR (couches basses déjà ~gelées)

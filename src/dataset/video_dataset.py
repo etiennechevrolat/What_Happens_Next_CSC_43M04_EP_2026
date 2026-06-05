@@ -99,6 +99,9 @@ def _pick_frame_indices(num_available: int, num_frames: int) -> List[int]:
     indices = [int(round(float(x))) for x in positions]
     return indices
 
+from collections import defaultdict
+import random 
+import re
 
 class VideoFrameDataset(Dataset):
     def __init__(
@@ -107,6 +110,7 @@ class VideoFrameDataset(Dataset):
         num_frames: int,
         transform: Callable[[Image.Image], torch.Tensor],
         sample_list: Optional[List[Tuple[Path, int]]] = None,
+        intra_class_swap_p: float=0.0
     ) -> None:
         """
         Args:
@@ -124,24 +128,40 @@ class VideoFrameDataset(Dataset):
         else:
             self.samples = list(sample_list)
 
+        self.samples_by_class : dict[int, list[Path]]= defaultdict(list)
+
+        for path, lbl in self.samples:
+            self.samples_by_class[lbl].append(path)
+        self.intra_class_swap_p = intra_class_swap_p
+
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
+
         video_dir, label = self.samples[index]
         frame_paths = _list_frame_paths(video_dir)
-        indices = _pick_frame_indices(len(frame_paths), self.num_frames)
+        indices=_pick_frame_indices(len(frame_paths),self.num_frames)
+        pil_frames = [Image.open(frame_paths[i]).convert("RGB") for i in indices]
 
-        frames: List[torch.Tensor] = []
-        for frame_index in indices:
-            path = frame_paths[frame_index]
-            with Image.open(path) as image:
-                rgb_image = image.convert("RGB")
-            # transform: PIL -> (C, H, W)
-            tensor_chw = self.transform(rgb_image)
-            frames.append(tensor_chw)
+        # Frame swap intra-classe (training only)
+        if random.random() < self.intra_class_swap_p:
+            same_class_dirs = self.samples_by_class[label]
+            if len(same_class_dirs) > 1:
+                # tire un autre clip de la même classe
+                other_dir = random.choice([d for d in same_class_dirs if d != video_dir])
+                other_paths = _list_frame_paths(other_dir)
+                other_indices = _pick_frame_indices(len(other_paths), self.num_frames)
 
-        # Stack time dimension: (T, C, H, W)
-        video_tensor = torch.stack(frames, dim=0)
+                # tire 1 ou 2 positions à swapper
+                num_swaps = random.randint(1, 2)
+                swap_positions = random.sample(range(self.num_frames), num_swaps)
+                for pos in swap_positions:
+                    with Image.open(other_paths[other_indices[pos]]) as img:
+                        pil_frames[pos] = img.convert("RGB")
+
+        # transform: liste de PIL -> tensor (T, C, H, W)
+        video_tensor = self.transform(pil_frames)
+
         label_tensor = torch.tensor(label, dtype=torch.long)
         return video_tensor, label_tensor

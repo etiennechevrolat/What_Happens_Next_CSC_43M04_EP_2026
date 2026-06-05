@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - override /model: videomae_v2
+
+dataset:
+  num_frames: 4
+
+training:
+  # Self-supervisé : pas de label, pas de mixup, pas de freeze
+  lr: 1.5e-4
+  epochs: 200
+  batch_size: 48
+  # Sauvegarde
+  checkpoint_path: ${hydra:runtime.cwd}/videomae_v2_pretrain.pt
+  # MAE-specific (récupérables via cfg.training.* dans le script de pretrain)
+  warmup_epochs: 10
+  weight_decay: 0.05

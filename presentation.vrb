@@ -1,0 +1,17 @@
+\frametitle{MixUp / CutMix vidéo cohérent}
+\textbf{Contrainte spécifique vidéo.} Un $\lambda$ ou une box par frame casserait la cohérence temporelle. Solution :
+  \begin{itemize}
+    \item Un seul $\lambda \sim \text{Beta}(\alpha, \alpha)$ tiré par batch, appliqué identiquement à toutes les frames.
+    \item Pour CutMix : une seule box spatiale $(x_1, y_1, x_2, y_2)$ broadcastée sur l'axe $T$.
+    \item Soft targets : label smoothing replié dans les one-hots, perte = \texttt{SoftTargetCrossEntropy}.
+  \end{itemize}
+
+  \medskip
+  \begin{lstlisting}
+def __call__(self, x, y):  # x: (B,T,C,H,W), y: (B,)
+    y_oh = self._smooth_one_hot(y)
+    r = float(np.random.rand())
+    if r < self.cutmix_prob: return self._cutmix(x, y_oh)
+    if r < self.cutmix_prob + self.mixup_prob: return self._mixup(x, y_oh)
+    return x, y_oh
+  \end{lstlisting}

@@ -3,5 +3,8 @@ model:
   name: model3_A
   pretrained: false
   num_classes: ${num_classes}
-  dropout_rate: 0.5
+  dropout_rate: 0.6
+  dropout3d_p: 0.35
+  drop_path_rate: 0.15
+  num_frames: ${dataset.num_frames}
   norm_layer: "layernorm"

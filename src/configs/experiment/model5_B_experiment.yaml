@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - override /model: model5_B
+
+dataset:
+  num_frames: 4
+
+training:
+  mixup_alpha: 0.3
+  cutmix_alpha: 0.5
+  mixup_prob: 0.2
+  cutmix_prob: 0.0
+  label_smoothing: 0.1
+  backbone_init_from: ${hydra:runtime.cwd}/best_model_v3_36.pt
+  freeze_backbone_epochs: 5
+  lr: 2e-5
+  epochs: 80

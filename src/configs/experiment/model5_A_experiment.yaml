@@ -1,0 +1,12 @@
+# @package _global_
+defaults:
+  - override /model: model5_A
+
+dataset:
+  num_frames: 4
+
+training:
+  backbone_init_from: ${hydra:runtime.cwd}/best_model_v3_36.pt   # meilleur backbone model3_A
+  freeze_backbone_epochs: 5
+  lr: 1e-4
+  epochs: 100

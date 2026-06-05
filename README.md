@@ -65,7 +65,7 @@ python src/train.py experiment=baseline_from_scratch
 This sets the active `model` group (via Hydra `override /model: ...`). You can still override any field:
 
 ```bash
-python train.py experiment=baseline_from_scratch model.pretrained=false dataset.train_dir=/path/to/train
+python train.py experiment=baseline_from_scratch model.pretained=false dataset.train_dir=/path/to/train
 python train.py training.epochs=10 training.batch_size=16 training.lr=0.0001
 ```
 

@@ -25,6 +25,7 @@ import hydra
 import torch
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
+import torch.nn.functional as F_torch
 
 from dataset.video_dataset import VideoFrameDataset
 from train import build_model
@@ -118,33 +119,86 @@ def build_model_from_checkpoint(ckpt: Dict[str, Any]) -> torch.nn.Module:
     return build_model(cfg)
 
 
+def _spatial_crops(video: torch.Tensor, num_crops: int, crop_frac: float = 0.857) -> List[torch.Tensor]:
+    """
+    Multi-crop spatial TTA. video: (B, T, C, H, W) avec H=W=out_size.
+    Découpe `num_crops` patchs (192x192 si out_size=224 et crop_frac=0.857)
+    aux positions {center}, {TL,center,BR} ou {TL,TR,BL,BR,center}, puis resize
+    chacun à la taille d'origine pour passer dans le modèle.
+    Retourne une liste de tenseurs de même shape que `video`.
+    """
+    B, T, C, H, W = video.shape
+    out_size = H
+    cs = int(round(H * crop_frac))
+    cs = max(1, min(cs, H))
+    if cs == H or num_crops <= 1:
+        return [video]
+
+    di = H - cs
+    dj = W - cs
+    mid_i, mid_j = di // 2, dj // 2
+    if num_crops == 3:
+        offsets = [(0, 0), (mid_i, mid_j), (di, dj)]
+    elif num_crops >= 5:
+        offsets = [(0, 0), (0, dj), (di, 0), (di, dj), (mid_i, mid_j)]
+    else:
+        offsets = [(mid_i, mid_j)]
+
+    flat = video.reshape(B * T, C, H, W)
+    crops = []
+    for (i, j) in offsets:
+        c = flat[..., i:i + cs, j:j + cs]
+        c = F_torch.interpolate(c, size=(out_size, out_size), mode="bilinear", align_corners=False)
+        crops.append(c.reshape(B, T, C, out_size, out_size))
+    return crops
+
+
 @torch.no_grad()
 def run_inference(
-    model: torch.nn.Module,
+    models: List[torch.nn.Module],
     loader: DataLoader,
     device: torch.device,
     total_videos: int,
+    use_tta_flip: bool = True,
+    num_crops: int = 5,
+    crop_frac: float = 0.857,
 ) -> List[int]:
-    """Run the model on the loader; print batch progress to stdout."""
-    model.eval()
-    preds: List[int] = []
+    """
+    Ensemble : chaque modèle prédit, et chaque prédiction passe par TTA flip
+    + multi-crop spatial. Renvoie les argmax sur la moyenne des softmax
+    (n_models × n_crops × {1,2} passes au total).
+    """
+    for m in models:
+        m.eval()
+
+    preds = []
     n_batches = len(loader)
-    # About 10 progress lines for long runs; at least every batch if tiny
     log_interval = max(1, n_batches // 10)
     processed = 0
+
     for batch_idx, (video_batch, _labels) in enumerate(loader, start=1):
         video_batch = video_batch.to(device)
-        logits = model(video_batch)
-        batch_pred = logits.argmax(dim=1).cpu().tolist()
-        preds.extend(int(p) for p in batch_pred)
-        bs = video_batch.size(0)
-        processed += bs
+        crops = _spatial_crops(video_batch, num_crops=num_crops, crop_frac=crop_frac)
+
+        probs_sum = None
+        n_passes = 0
+        for crop in crops:
+            crop_flip = torch.flip(crop, dims=[-1]) if use_tta_flip else None
+            for m in models:
+                p = F_torch.softmax(m(crop), dim=1)
+                probs_sum = p if probs_sum is None else probs_sum + p
+                n_passes += 1
+                if use_tta_flip:
+                    probs_sum = probs_sum + F_torch.softmax(m(crop_flip), dim=1)
+                    n_passes += 1
+
+        probs = probs_sum / n_passes
+        preds.extend(int(p) for p in probs.argmax(dim=1).cpu().tolist())
+
+        processed += video_batch.size(0)
         if batch_idx % log_interval == 0 or batch_idx == n_batches:
-            print(
-                f"  Inference batch {batch_idx}/{n_batches} "
-                f"({processed}/{total_videos} clips)",
-                flush=True,
-            )
+            print(f"  Inference batch {batch_idx}/{n_batches} ({processed}/{total_videos})", flush=True)
+
     return preds
 
 
@@ -160,19 +214,38 @@ def main(cfg: DictConfig) -> None:
         device_str = "cpu"
     device = torch.device(device_str)
 
-    checkpoint_path = Path(cfg.training.checkpoint_path).resolve()
-    if not checkpoint_path.is_file():
-        raise SystemExit(f"Checkpoint not found: {checkpoint_path}")
 
-    print(f"Loading checkpoint: {checkpoint_path}", flush=True)
-    ckpt: Dict[str, Any] = torch.load(checkpoint_path, map_location="cpu")
-    model = build_model_from_checkpoint(ckpt)
-    model.load_state_dict(ckpt["model_state_dict"])
-    model.to(device)
-    print(f"Model on device: {device}", flush=True)
+    # Liste de checkpoints (Hydra : peut être string unique ou liste)
+    ckpt_cfg = cfg.training.get("checkpoints", None)
+    if ckpt_cfg is None:
+        ckpt_paths = [Path(cfg.training.checkpoint_path).resolve()]
+    else:
+        ckpt_paths = [Path(str(p)).resolve() for p in ckpt_cfg]
 
-    num_frames = int(ckpt.get("num_frames", cfg.dataset.num_frames))
-    pretrained = bool(ckpt.get("pretrained", cfg.model.pretrained))
+    for p in ckpt_paths:
+        if not p.is_file():
+            raise SystemExit(f"Checkpoint not found: {p}")
+
+    print(f"Loading {len(ckpt_paths)} checkpoint(s):", flush=True)
+    models = []
+    num_frames_ref, pretrained_ref, num_classes_ref = None, None, None
+    for p in ckpt_paths:
+        print(f"  - {p}", flush=True)
+        ckpt = torch.load(p, map_location="cpu", weights_only=False)
+        m = build_model_from_checkpoint(ckpt)
+        m.load_state_dict(ckpt["model_state_dict"])
+        m.to(device)
+        models.append(m)
+        nf = int(ckpt.get("num_frames", cfg.dataset.num_frames))
+        pre = bool(ckpt.get("pretrained", cfg.model.pretrained))
+        nc = int(ckpt.get("num_classes", cfg.model.num_classes))
+        if num_frames_ref is None:
+            num_frames_ref, pretrained_ref, num_classes_ref = nf, pre, nc
+        elif (nf, pre, nc) != (num_frames_ref, pretrained_ref, num_classes_ref):
+            raise SystemExit(f"Incompatible checkpoint {p}: ({nf},{pre},{nc}) vs ({num_frames_ref},{pretrained_ref},{num_classes_ref})")
+
+    num_frames = num_frames_ref
+    pretrained = pretrained_ref
     eval_transform = build_transforms(is_training=False, use_imagenet_norm=pretrained)
 
     test_root = Path(cfg.dataset.test_dir).resolve()
@@ -221,7 +294,14 @@ def main(cfg: DictConfig) -> None:
         f"{len(loader)} batches",
         flush=True,
     )
-    predictions = run_inference(model, loader, device, total_videos=len(dataset))
+    num_crops = int(cfg.training.get("num_crops", 5))
+    crop_frac = float(cfg.training.get("crop_frac", 0.857))
+    use_tta_flip = bool(cfg.training.get("use_tta_flip", True))
+    print(f"TTA: num_crops={num_crops}, crop_frac={crop_frac}, hflip={use_tta_flip}", flush=True)
+    predictions = run_inference(
+        models, loader, device, total_videos=len(dataset),
+        use_tta_flip=use_tta_flip, num_crops=num_crops, crop_frac=crop_frac,
+    )
     print("Inference finished.", flush=True)
 
     if len(predictions) != len(video_names):
